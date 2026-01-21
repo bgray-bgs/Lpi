@@ -1,0 +1,11 @@
+# secrets / per-device
+lpi_monitor.json
+device_id.txt
+
+# runtime outputs
+pi_status.json
+*.log
+
+# python junk
+__pycache__/
+*.pyc
