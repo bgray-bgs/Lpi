@@ -12,7 +12,6 @@ apt-get install -y \
   python3-astral \
   python3-requests \
   python3-google-auth \
-  flock
 
 # 2) Create folders
 echo "[2/6] Creating folders..."
