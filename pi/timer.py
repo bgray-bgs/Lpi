@@ -21,6 +21,10 @@ city = LocationInfo(
 # -------- GPIO Setup --------
 light = LED(GPIO_PIN, active_high=True)
 
+# Keep GPIO driven after script exits (cron-run)
+# Prevents relay drop when gpiozero cleans up
+light._pin.close = lambda: None
+
 def LightOn():
     light.on()
     print("Light ON (GPIO HIGH)")
