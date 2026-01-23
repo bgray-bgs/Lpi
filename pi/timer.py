@@ -19,19 +19,31 @@ city = LocationInfo(
 )
 
 # -------- GPIO Setup --------
-light = LED(GPIO_PIN, active_high=True)
+# IMPORTANT:
+# Do NOT create the LED at import time.
+# Creating it can briefly set the pin to a default state, which can click relays on every cron run.
+light = None
 
-# Keep GPIO driven after script exits (cron-run)
-# Prevents relay drop when gpiozero cleans up
-light._pin.close = lambda: None
+def init_light(should_be_on: bool):
+    global light
+    # Initialize the GPIO pin directly to the desired state (prevents relay clicking each cron run)
+    light = LED(GPIO_PIN, active_high=True, initial_value=should_be_on)
+
+    # Keep the GPIO line driven after the script exits so the relay stays latched.
+    # Some relay boards revert when the GPIO is released (process exit/cleanup).
+    # This uses a private gpiozero API; may break on future gpiozero updates.
+    light._pin.close = lambda: None
+
 
 def LightOn():
     light.on()
     print("Light ON (GPIO HIGH)")
 
+
 def LightOff():
     light.off()
     print("Light OFF (GPIO LOW)")
+
 
 def safe_localize(tz, naive_dt):
     """
@@ -50,6 +62,7 @@ def safe_localize(tz, naive_dt):
         bumped = naive_dt + datetime.timedelta(hours=1)
         return tz.localize(bumped, is_dst=None)
 
+
 # -------- Main Logic --------
 def main():
     local_tz = pytz.timezone(city.timezone)
@@ -57,7 +70,7 @@ def main():
     # ---- Time Setup ----
     if USE_TEST_TIME:
         test_time_naive = datetime.datetime(2025, 7, 24, 2, 45)
-        now_local = local_tz.localize(test_time_naive)
+        now_local = safe_localize(local_tz, test_time_naive)
         print("!!! TEST MODE ENABLED !!!")
     else:
         now_local = datetime.datetime.now(local_tz)
@@ -92,10 +105,16 @@ def main():
     print("========================")
 
     # ---- ON / OFF Decision ----
-    if lighton_local <= now_local < lightoff_local:
+    should_be_on = (lighton_local <= now_local < lightoff_local)
+
+    # Initialize GPIO to the desired state (prevents relay click each cron run)
+    init_light(should_be_on)
+
+    if should_be_on:
         LightOn()
     else:
         LightOff()
+
 
 # -------- Entry Point --------
 if __name__ == "__main__":
