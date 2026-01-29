@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # LPI Installer
-# Version: 1.2.0
+# Version: 1.2.3
 # Last updated: 2026-01-29
+#
+# - Installs dependencies
+# - Copies repo scripts into /home/pi
+# - Initializes override files (auto)
+# - Prompts for device_id ONLY (no username rename)
+# - Installs ROOT crontab entries reliably (no grep pipeline hang)
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "=== LPI Installer v1.2.0 ==="
+echo "=== LPI Installer v1.2.3 ==="
 echo "Repo: $REPO_ROOT"
 echo
 
@@ -16,21 +23,26 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-echo "[1/6] Installing OS packages..."
+echo "[1/7] Installing OS packages..."
 apt update
 apt install -y \
+  git \
+  cron \
+  util-linux \
   python3-gpiozero \
   python3-pytz \
   python3-astral \
   python3-requests \
-  python3-google-auth \
-  git
+  python3-google-auth
 
-echo "[2/6] Creating folders..."
+echo "[2/7] Enabling cron service..."
+systemctl enable --now cron >/dev/null 2>&1 || true
+
+echo "[3/7] Creating folders..."
 mkdir -p /home/pi/pi_monitor_test
 
-echo "[3/6] Copying scripts into /home/pi..."
-# Expect these paths in repo:
+echo "[4/7] Copying scripts into /home/pi..."
+# Repo expected layout:
 #   pi/timer.py
 #   pi/lighton.py
 #   pi/lightoff.py
@@ -49,7 +61,7 @@ install -m 0755 "$REPO_ROOT/pi/pi_monitor_test/firestore_upload_status.py" /home
 chown -R pi:pi /home/pi/pi_monitor_test || true
 chown pi:pi /home/pi/timer.py /home/pi/lighton.py /home/pi/lightoff.py || true
 
-echo "[4/6] Initializing override state..."
+echo "[5/7] Initializing override state..."
 echo "auto" > /home/pi/override_mode.txt
 chown pi:pi /home/pi/override_mode.txt || true
 
@@ -61,7 +73,7 @@ with open("/home/pi/override_state.json","w") as f:
 PY
 chown pi:pi /home/pi/override_state.json || true
 
-echo "[5/6] Setting device ID (dashboard name)..."
+echo "[6/7] Setting device ID (dashboard name)..."
 read -r -p "Enter device ID (example BGWebster): " DEVICE_ID
 DEVICE_ID="${DEVICE_ID// /}"
 if [[ -z "$DEVICE_ID" ]]; then
@@ -80,30 +92,37 @@ echo "  sudo chown root:root /home/pi/lpi_monitor.json"
 echo "  sudo chmod 600 /home/pi/lpi_monitor.json"
 echo
 
-echo "[6/6] Installing cron jobs (root)..."
+echo "[7/7] Installing cron jobs (root)..."
+
 TMP_CRON="$(mktemp)"
+
+# Pull existing root crontab if it exists; otherwise start empty
 crontab -l 2>/dev/null > "$TMP_CRON" || true
 
-# Remove old lines if they exist (idempotent)
-grep -v "pi_monitor_test/command_apply.py" "$TMP_CRON" | \
-grep -v "pi_monitor_test/status_test.py" | \
-grep -v "pi_monitor_test/firestore_upload_status.py" > "${TMP_CRON}.clean"
-mv "${TMP_CRON}.clean" "$TMP_CRON"
+# Remove any prior LPI lines safely (works even if file is empty)
+sed -i \
+  -e '\#/home/pi/pi_monitor_test/command_apply.py#d' \
+  -e '\#/home/pi/pi_monitor_test/status_test.py#d' \
+  -e '\#/home/pi/pi_monitor_test/firestore_upload_status.py#d' \
+  "$TMP_CRON"
 
+# Append our lines
 cat >> "$TMP_CRON" <<'CRON'
 * * * * * flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
 * * * * * sleep 10; flock -n /tmp/timer.lock /usr/bin/python3 /home/pi/pi_monitor_test/status_test.py >> /home/pi/status_cron.log 2>&1
 */5 * * * * sleep 20; flock -n /tmp/upload.lock /usr/bin/python3 /home/pi/pi_monitor_test/firestore_upload_status.py >> /home/pi/upload_cron.log 2>&1
 CRON
 
+# Install root crontab
 crontab "$TMP_CRON"
 rm -f "$TMP_CRON"
 
+echo "✅ Root crontab installed."
 echo
-echo "✅ Install complete."
-echo "Next:"
-echo "  1) Copy /home/pi/lpi_monitor.json onto the Pi and set permissions."
-echo "  2) Wait ~1-5 minutes and check logs:"
-echo "     tail -n 40 /home/pi/command_cron.log"
-echo "     tail -n 40 /home/pi/status_cron.log"
-echo "     tail -n 40 /home/pi/upload_cron.log"
+echo "Verify:"
+echo "  sudo crontab -l"
+echo
+echo "Log checks (after 1-2 minutes):"
+echo "  tail -n 40 /home/pi/command_cron.log"
+echo "  tail -n 40 /home/pi/status_cron.log"
+echo "  tail -n 40 /home/pi/upload_cron.log"
