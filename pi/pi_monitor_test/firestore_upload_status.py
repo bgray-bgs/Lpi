@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+# LPI Firestore Upload Status
+# Version: 1.1.0
+# Last updated: 2026-01-27
+
 import json
 import socket
 import requests
@@ -8,13 +13,12 @@ from google.oauth2 import service_account
 import google.auth.transport.requests
 
 SERVICE_ACCOUNT_FILE = "/home/pi/lpi_monitor.json"
-PROJECT_ID = "lpi-monitor"        # change if your project ID ever changes
+PROJECT_ID = "lpi-monitor"
 COLLECTION = "devices"
 LOCAL_STATUS_PATH = "/home/pi/pi_status.json"
 ID_FILE = "/home/pi/device_id.txt"
 
 def to_firestore_fields(d):
-    """Convert a plain Python dict to Firestore REST 'fields' format."""
     def wrap(value):
         if isinstance(value, bool):
             return {"booleanValue": value}
@@ -27,25 +31,19 @@ def to_firestore_fields(d):
         if value is None:
             return {"nullValue": None}
         return {"stringValue": str(value)}
-
     return {"fields": {k: wrap(v) for k, v in d.items()}}
 
 def main():
-    # Basic file checks
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
         print("❌ Missing service account file:", SERVICE_ACCOUNT_FILE)
         return
 
-    # Pick device ID: prefer /home/pi/device_id.txt, else fallback to hostname
     if os.path.exists(ID_FILE):
         with open(ID_FILE) as f:
-            device_id = f.read().strip()
-        if not device_id:
-            device_id = socket.gethostname()
+            device_id = f.read().strip() or socket.gethostname()
     else:
         device_id = socket.gethostname()
 
-    # Read local status JSON
     if not os.path.exists(LOCAL_STATUS_PATH):
         print("❌ No local status file at", LOCAL_STATUS_PATH)
         return
@@ -53,7 +51,6 @@ def main():
     with open(LOCAL_STATUS_PATH, "r") as f:
         status = json.load(f)
 
-    # Build credentials and get access token
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE,
         scopes=["https://www.googleapis.com/auth/datastore"],
@@ -62,46 +59,38 @@ def main():
     creds.refresh(auth_req)
     token = creds.token
 
-    # Firestore document URL for this device
     url = (
         f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)"
         f"/documents/{COLLECTION}/{device_id}"
     )
 
-    # Choose output lines: prefer new key stdout_lines, fall back to old script_output_lines
-    output_lines = status.get("stdout_lines")
-    if not output_lines:
-        output_lines = status.get("script_output_lines", [])
+    output_lines = status.get("stdout_lines") or status.get("script_output_lines", [])
 
-    # Heartbeat/staleness fields
     firestore_uploaded_at = datetime.now(timezone.utc).isoformat()
     local_last_updated = status.get("last_updated")
 
-    # Prepare payload
+    # NEW: override mode from status JSON (set by status_test.py)
+    override_mode = status.get("override_mode", "auto")
+
     payload = to_firestore_fields({
         "device_id": device_id,
         "reported_hostname": socket.gethostname(),
 
-        # Keep old 'online' so dashboard continues to work
         "online": status.get("online", False),
-
-        # Add richer fields for debugging/visibility
         "timer_ok": status.get("timer_ok"),
         "return_code": status.get("return_code"),
 
-        # Keep existing last_updated (this is the LOCAL script run time)
         "last_updated": local_last_updated,
-
-        # NEW: upload timestamp (lets you detect "Pi is fine but upload is stale")
         "firestore_uploaded_at": firestore_uploaded_at,
         "local_last_updated": local_last_updated,
 
-        # Dashboard output (compat): keep field name 'script_output_lines'
         "script_output_lines": output_lines,
 
-        # New fields (optional for dashboard, great for troubleshooting)
         "stderr_lines": status.get("stderr_lines", []),
         "error": status.get("error"),
+
+        # NEW: so dashboard can show/highlight active override without extra reads
+        "override_mode": override_mode,
     })
 
     resp = requests.patch(
@@ -114,6 +103,7 @@ def main():
     print("HTTP", resp.status_code)
     if 200 <= resp.status_code < 300:
         print("✅ Uploaded status for", device_id)
+        print("   override_mode:", override_mode)
         print("   local_last_updated:   ", local_last_updated)
         print("   firestore_uploaded_at:", firestore_uploaded_at)
     else:

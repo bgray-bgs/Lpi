@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+# LPI Timer Control
+# Version: 1.2.0
+# Last updated: 2026-01-29
+
 import datetime
 import pytz
 from astral.sun import sun
