@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # LPI Installer
-# Version: 1.2.3
-# Last updated: 2026-01-29
+# Version: 1.2.4
+# Last updated: 2026-02-03
 #
-# - Installs dependencies
-# - Copies repo scripts into /home/pi
-# - Initializes override files (auto)
-# - Prompts for device_id ONLY (no username rename)
-# - Installs ROOT crontab entries reliably (no grep pipeline hang)
+# CHANGE:
+# - command_apply.py runs every 15 seconds
+# - status_test.py runs every 15 seconds
+# - no other behavior changes
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "=== LPI Installer v1.2.3 ==="
+echo "=== LPI Installer v1.2.4 ==="
 echo "Repo: $REPO_ROOT"
 echo
 
@@ -42,14 +41,6 @@ echo "[3/7] Creating folders..."
 mkdir -p /home/pi/pi_monitor_test
 
 echo "[4/7] Copying scripts into /home/pi..."
-# Repo expected layout:
-#   pi/timer.py
-#   pi/lighton.py
-#   pi/lightoff.py
-#   pi/pi_monitor_test/status_test.py
-#   pi/pi_monitor_test/command_apply.py
-#   pi/pi_monitor_test/firestore_upload_status.py
-
 install -m 0755 "$REPO_ROOT/pi/timer.py" /home/pi/timer.py
 install -m 0755 "$REPO_ROOT/pi/lighton.py" /home/pi/lighton.py
 install -m 0755 "$REPO_ROOT/pi/lightoff.py" /home/pi/lightoff.py
@@ -96,24 +87,28 @@ echo "[7/7] Installing cron jobs (root)..."
 
 TMP_CRON="$(mktemp)"
 
-# Pull existing root crontab if it exists; otherwise start empty
 crontab -l 2>/dev/null > "$TMP_CRON" || true
 
-# Remove any prior LPI lines safely (works even if file is empty)
 sed -i \
   -e '\#/home/pi/pi_monitor_test/command_apply.py#d' \
   -e '\#/home/pi/pi_monitor_test/status_test.py#d' \
   -e '\#/home/pi/pi_monitor_test/firestore_upload_status.py#d' \
   "$TMP_CRON"
 
-# Append our lines
 cat >> "$TMP_CRON" <<'CRON'
 * * * * * flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
+* * * * * sleep 15; flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
+* * * * * sleep 30; flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
+* * * * * sleep 45; flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
+
 * * * * * sleep 10; flock -n /tmp/timer.lock /usr/bin/python3 /home/pi/pi_monitor_test/status_test.py >> /home/pi/status_cron.log 2>&1
+* * * * * sleep 25; flock -n /tmp/timer.lock /usr/bin/python3 /home/pi/pi_monitor_test/status_test.py >> /home/pi/status_cron.log 2>&1
+* * * * * sleep 40; flock -n /tmp/timer.lock /usr/bin/python3 /home/pi/pi_monitor_test/status_test.py >> /home/pi/status_cron.log 2>&1
+* * * * * sleep 55; flock -n /tmp/timer.lock /usr/bin/python3 /home/pi/pi_monitor_test/status_test.py >> /home/pi/status_cron.log 2>&1
+
 */5 * * * * sleep 20; flock -n /tmp/upload.lock /usr/bin/python3 /home/pi/pi_monitor_test/firestore_upload_status.py >> /home/pi/upload_cron.log 2>&1
 CRON
 
-# Install root crontab
 crontab "$TMP_CRON"
 rm -f "$TMP_CRON"
 
