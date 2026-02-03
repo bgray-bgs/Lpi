@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # LPI Installer
-# Version: 1.2.4
+# Version: 1.2.5
 # Last updated: 2026-02-03
 #
-# CHANGE:
-# - command_apply.py runs every 15 seconds
-# - status_test.py runs every 15 seconds
-# - no other behavior changes
+# CHANGE (permissions only):
+# - Ensure /home/pi/pi_status.json exists and is writable by user 'pi'
+#   (status_test.py writes it, firestore_upload_status.py reads it)
+# - No service changes
+# - Cron timing remains as currently installed (15s command/status, 1m upload)
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "=== LPI Installer v1.2.4 ==="
+echo "=== LPI Installer v1.2.5 ==="
 echo "Repo: $REPO_ROOT"
 echo
 
@@ -52,6 +53,19 @@ install -m 0755 "$REPO_ROOT/pi/pi_monitor_test/firestore_upload_status.py" /home
 chown -R pi:pi /home/pi/pi_monitor_test || true
 chown pi:pi /home/pi/timer.py /home/pi/lighton.py /home/pi/lightoff.py || true
 
+# --- FIX: ensure pi can write status JSON (manual runs + avoids permission drift) ---
+# status_test.py writes /home/pi/pi_status.json :contentReference[oaicite:2]{index=2}
+# firestore_upload_status.py reads /home/pi/pi_status.json :contentReference[oaicite:3]{index=3}
+echo "Ensuring /home/pi/pi_status.json is writable by pi..."
+touch /home/pi/pi_status.json
+chown pi:pi /home/pi/pi_status.json || true
+chmod 664 /home/pi/pi_status.json || true
+
+# Optional but harmless: ensure logs can be read easily
+touch /home/pi/command_cron.log /home/pi/status_cron.log /home/pi/upload_cron.log
+chown pi:pi /home/pi/command_cron.log /home/pi/status_cron.log /home/pi/upload_cron.log || true
+chmod 664 /home/pi/command_cron.log /home/pi/status_cron.log /home/pi/upload_cron.log || true
+
 echo "[5/7] Initializing override state..."
 echo "auto" > /home/pi/override_mode.txt
 chown pi:pi /home/pi/override_mode.txt || true
@@ -86,15 +100,16 @@ echo
 echo "[7/7] Installing cron jobs (root)..."
 
 TMP_CRON="$(mktemp)"
-
 crontab -l 2>/dev/null > "$TMP_CRON" || true
 
+# Remove any prior LPI lines safely
 sed -i \
   -e '\#/home/pi/pi_monitor_test/command_apply.py#d' \
   -e '\#/home/pi/pi_monitor_test/status_test.py#d' \
   -e '\#/home/pi/pi_monitor_test/firestore_upload_status.py#d' \
   "$TMP_CRON"
 
+# Append our lines (matches what you currently see in sudo crontab -l)
 cat >> "$TMP_CRON" <<'CRON'
 * * * * * flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
 * * * * * sleep 15; flock -n /tmp/cmd.lock /usr/bin/python3 /home/pi/pi_monitor_test/command_apply.py >> /home/pi/command_cron.log 2>&1
@@ -117,7 +132,4 @@ echo
 echo "Verify:"
 echo "  sudo crontab -l"
 echo
-echo "Log checks (after 1-2 minutes):"
-echo "  tail -n 40 /home/pi/command_cron.log"
-echo "  tail -n 40 /home/pi/status_cron.log"
-echo "  tail -n 40 /home/pi/upload_cron.log"
+e
