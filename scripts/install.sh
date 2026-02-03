@@ -132,4 +132,7 @@ echo
 echo "Verify:"
 echo "  sudo crontab -l"
 echo
-e
+echo "Log checks:"
+echo "  tail -n 40 /home/pi/command_cron.log"
+echo "  tail -n 40 /home/pi/status_cron.log"
+echo "  tail -n 40 /home/pi/upload_cron.log"
